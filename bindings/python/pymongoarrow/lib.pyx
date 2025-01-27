@@ -24,7 +24,7 @@ import bson
 import numpy as np
 from pyarrow import timestamp, default_memory_pool
 
-from pymongoarrow.errors import InvalidBSON
+from pymongoarrow.errors import InvalidBSON, PyMongoArrowError
 from pymongoarrow.types import ObjectIdType, Decimal128Type as Decimal128Type_, BinaryType, CodeType
 
 # Cython imports
@@ -358,7 +358,10 @@ cdef class StringBuilder(_ArrayBuilderBase):
         if value_t == BSON_TYPE_UTF8:
             value = bson_iter_utf8(doc_iter, &str_len)
             return self.builder.get().Append(value, str_len)
-        return self.builder.get().AppendNull()
+        if value_t == BSON_TYPE_NULL:
+            return self.builder.get().AppendNull()
+
+        raise PyMongoArrowError("Invalid BSON type for string")
 
     cdef shared_ptr[CArrayBuilder] get_builder(self):
         return <shared_ptr[CArrayBuilder]>self.builder
@@ -376,7 +379,10 @@ cdef class CodeBuilder(StringBuilder):
         if value_t == BSON_TYPE_CODE:
             bson_str = bson_iter_code(doc_iter, &str_len)
             return self.builder.get().Append(bson_str, str_len)
-        return self.builder.get().AppendNull()
+        if value_t == BSON_TYPE_NULL:
+            return self.builder.get().AppendNull()
+
+        raise PyMongoArrowError("Invalid BSON type for code")
 
     cdef shared_ptr[CArrayBuilder] get_builder(self):
         return <shared_ptr[CArrayBuilder]>self.builder
@@ -397,7 +403,10 @@ cdef class ObjectIdBuilder(_ArrayBuilderBase):
     cdef CStatus append_raw(self, bson_iter_t * doc_iter, bson_type_t value_t):
         if value_t == BSON_TYPE_OID:
             return self.builder.get().Append(bson_iter_oid(doc_iter).bytes)
-        return self.builder.get().AppendNull()
+        if value_t == BSON_TYPE_NULL:
+            return self.builder.get().AppendNull()
+
+        raise PyMongoArrowError("Invalid BSON type for ObjectId")
 
     cdef shared_ptr[CArrayBuilder] get_builder(self):
         return <shared_ptr[CArrayBuilder]>self.builder
@@ -434,7 +443,10 @@ cdef class Int32Builder(_ArrayBuilderBase):
             if ivalue > INT_MAX or ivalue < INT_MIN:
                 raise OverflowError("Overflowed Int32 value")
             return self.builder.get().Append(ivalue)
-        return self.builder.get().AppendNull()
+        if value_t == BSON_TYPE_NULL:
+            return self.builder.get().AppendNull()
+
+        raise PyMongoArrowError("Invalid BSON type for Int32")
 
     cdef shared_ptr[CArrayBuilder] get_builder(self):
         return <shared_ptr[CArrayBuilder]>self.builder
@@ -461,7 +473,10 @@ cdef class Int64Builder(_ArrayBuilderBase):
             if isnan(dvalue):
                 return self.builder.get().AppendNull()
             return self.builder.get().Append(bson_iter_as_int64(doc_iter))
-        return self.builder.get().AppendNull()
+        if value_t == BSON_TYPE_NULL:
+            return self.builder.get().AppendNull()
+
+        raise PyMongoArrowError("Invalid BSON type for Int64")
 
     cdef shared_ptr[CArrayBuilder] get_builder(self):
         return <shared_ptr[CArrayBuilder]>self.builder
@@ -481,7 +496,10 @@ cdef class DoubleBuilder(_ArrayBuilderBase):
                     value_t == BSON_TYPE_INT32 or
                     value_t == BSON_TYPE_INT64):
             return self.builder.get().Append(bson_iter_as_double(doc_iter))
-        return self.builder.get().AppendNull()
+        if value_t == BSON_TYPE_NULL:
+            return self.builder.get().AppendNull()
+
+        raise PyMongoArrowError("Invalid BSON type for Double")
 
     cdef shared_ptr[CArrayBuilder] get_builder(self):
         return <shared_ptr[CArrayBuilder]>self.builder
@@ -511,7 +529,10 @@ cdef class DatetimeBuilder(_ArrayBuilderBase):
     cdef CStatus append_raw(self, bson_iter_t * doc_iter, bson_type_t value_t):
         if value_t == BSON_TYPE_DATE_TIME:
             return self.builder.get().Append(bson_iter_date_time(doc_iter))
-        return self.builder.get().AppendNull()
+        if value_t == BSON_TYPE_NULL:
+            return self.builder.get().AppendNull()
+
+        raise PyMongoArrowError("Invalid BSON type for Datetime")
 
     cdef shared_ptr[CArrayBuilder] get_builder(self):
         return <shared_ptr[CArrayBuilder]>self.builder
@@ -529,7 +550,10 @@ cdef class Date64Builder(_ArrayBuilderBase):
     cdef CStatus append_raw(self, bson_iter_t * doc_iter, bson_type_t value_t):
         if value_t == BSON_TYPE_DATE_TIME:
             return self.builder.get().Append(bson_iter_date_time(doc_iter))
-        return self.builder.get().AppendNull()
+        if value_t == BSON_TYPE_NULL:
+            return self.builder.get().AppendNull()
+
+        raise PyMongoArrowError("Invalid BSON type for Date64")
 
     @property
     def unit(self):
@@ -558,7 +582,10 @@ cdef class Date32Builder(_ArrayBuilderBase):
             # Convert from milliseconds to days (1000*60*60*24)
             seconds_val = value // 86400000
             return self.builder.get().Append(seconds_val)
-        return self.builder.get().AppendNull()
+        if value_t == BSON_TYPE_NULL:
+            return self.builder.get().AppendNull()
+
+        raise PyMongoArrowError("Invalid BSON type for Date32")
 
     @property
     def unit(self):
@@ -593,7 +620,10 @@ cdef class BoolBuilder(_ArrayBuilderBase):
     cdef CStatus append_raw(self, bson_iter_t * doc_iter, bson_type_t value_t):
         if value_t == BSON_TYPE_BOOL:
             return self.builder.get().Append(bson_iter_bool(doc_iter))
-        return self.builder.get().AppendNull()
+        if value_t == BSON_TYPE_NULL:
+            return self.builder.get().AppendNull()
+
+        raise PyMongoArrowError("Invalid BSON type for Bool")
 
     cdef shared_ptr[CArrayBuilder] get_builder(self):
         return <shared_ptr[CArrayBuilder]>self.builder
@@ -619,13 +649,15 @@ cdef class Decimal128Builder(_ArrayBuilderBase):
         if self.supported == 0:
             # We do not support big-endian systems.
             return self.builder.get().AppendNull()
-
         if value_t == BSON_TYPE_DECIMAL128:
             bson_iter_decimal128(doc_iter, &dec128)
             memcpy(dec128_buf, &dec128.low, 8);
             memcpy(dec128_buf + 8, &dec128.high, 8)
             return self.builder.get().Append(dec128_buf)
-        return self.builder.get().AppendNull()
+        if value_t == BSON_TYPE_NULL:
+            return self.builder.get().AppendNull()
+
+        raise PyMongoArrowError("Invalid BSON type for Decimal128")
 
     cdef shared_ptr[CArrayBuilder] get_builder(self):
         return <shared_ptr[CArrayBuilder]>self.builder
@@ -659,7 +691,10 @@ cdef class BinaryBuilder(_ArrayBuilderBase):
             if subtype != self._subtype:
                 return self.builder.get().AppendNull()
             return self.builder.get().Append(val_buf, val_buf_len)
-        return self.builder.get().AppendNull()
+        if value_t == BSON_TYPE_NULL:
+            return self.builder.get().AppendNull()
+
+        raise PyMongoArrowError("Invalid BSON type for Binary")
 
     cdef shared_ptr[CArrayBuilder] get_builder(self):
         return <shared_ptr[CArrayBuilder]>self.builder
